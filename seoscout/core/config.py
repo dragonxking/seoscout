@@ -81,6 +81,8 @@ class Config:
     LLM_TIMEOUT = 300
     LLM_RETRY_ATTEMPTS = 2
     LLM_RETRY_DELAY = 5
+    # Optional provider-specific thinking toggle; empty preserves provider defaults.
+    LLM_THINKING = ""
 
     # ============================================================
     # Generate concurrency
@@ -177,6 +179,7 @@ class Config:
 
         # LLM API (generate + translate)
         cls.LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+        cls.LLM_THINKING = os.getenv("LLM_THINKING", "").strip().lower()
         cls.LLM_API_BASE_URL = os.getenv("LLM_API_BASE_URL", "https://api.apifast.tech/v1")
         cls.LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
         cls.LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))

@@ -14,6 +14,7 @@ from .config import Config
 from .models import WebItem
 from .utils import is_blocked_domain, load_cache, save_cache, get_url_hash
 from .cleaner import ContentCleaner
+from .steam_news import steam_news_endpoint, official_news_text
 
 
 class TokenBucket:
@@ -220,6 +221,7 @@ class Web:
                 return (item, cache_data["content"])
 
             # 2. 缓存未命中，提取内容（带重试）
+            proxy_url = self.config.get_proxy_url_for_stage("extract")
             for attempt in range(self.config.WEB_EXTRACT_RETRIES):
                 # 速率限制
                 await rate_limiter.acquire()
@@ -232,9 +234,6 @@ class Web:
                     if self.config.JINA_API_KEY:
                         headers["Authorization"] = f"Bearer {self.config.JINA_API_KEY}"
 
-                    # 获取提取阶段代理配置
-                    proxy_url = self.config.get_proxy_url_for_stage("extract")
-
                     async with aiohttp.ClientSession() as session:
                         async with session.get(jina_url, headers=headers, timeout=30, proxy=proxy_url) as response:
                             # HTTP 错误处理
@@ -242,7 +241,7 @@ class Web:
                                 if attempt < self.config.WEB_EXTRACT_RETRIES - 1:
                                     await asyncio.sleep(2 ** attempt)  # 指数退避：2s, 4s, 8s
                                     continue
-                                return (item, "")
+                                break
 
                             content = await response.text()
 
@@ -251,7 +250,7 @@ class Web:
                                 if attempt < self.config.WEB_EXTRACT_RETRIES - 1:
                                     await asyncio.sleep(2 ** attempt)
                                     continue
-                                return (item, "")
+                                break
 
                             # 清理内容（移除导航链接、广告等）
                             cleaned_content = self.cleaner.clean(content)
@@ -269,9 +268,35 @@ class Web:
 
                 except Exception as e:
                     if attempt == self.config.WEB_EXTRACT_RETRIES - 1:
-                        # 最后一次重试失败，返回空内容
-                        return (item, "")
+                        # Exhausted reader attempts; try the limited official fallback below.
+                        break
                     await asyncio.sleep(2 ** attempt)  # 指数退避
 
+            # Jina may be unavailable even when the original official source is reachable.
+            # Limit this fallback to Steam app news, with publisher announcements only.
+            return await self._steam_news_fallback(item, url_hash, proxy_url)
+
+    async def _steam_news_fallback(self, item: WebItem, url_hash: str, proxy_url=None):
+        endpoint = steam_news_endpoint(item.url)
+        if not endpoint:
+            return (item, "")
+        appid, api_url = endpoint
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url, timeout=30, proxy=proxy_url) as response:
+                    if response.status != 200:
+                        return (item, "")
+                    payload = await response.json(content_type=None)
+            content = official_news_text(payload, appid)
+            if not content:
+                return (item, "")
+            save_cache(url_hash, "web", {
+                "title": item.title, "url": item.url, "domain": item.domain,
+                "content": content, "source_type": "steam_official_news_api",
+                "transport_url": api_url,
+            }, title=item.title)
+            print(f"  ✓ Steam official-news API fallback: {item.title}")
+            return (item, content)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError):
             return (item, "")
 

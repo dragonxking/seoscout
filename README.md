@@ -125,6 +125,22 @@ python -m seoscout run --keywords keywords.json
 
 ## How It Works
 
+### Reviewed writing samples (2026-10-27)
+
+For the source-grounded V2 writing prompt, pass it explicitly after reviewing search and collected sources:
+
+```bash
+seoscout generate --keywords keywords.json --prompt seoscout/templates/generate_v2.md
+```
+
+The V2 prompt does not force word counts, keyword repetitions or tables. The legacy built-in prompt remains available; V2 is selected with `--prompt` in this workflow.
+
+`LLM_THINKING` may be empty (preserve provider defaults), `enabled`, or `disabled`. Set it only for a provider that supports the `thinking` field, such as DeepSeek. For an initial DeepSeek writing sample, `LLM_THINKING=disabled`, `LLM_MAX_TOKENS=8192` and `GENERATE_BATCH_SIZE=1` provide a conservative starting configuration; verify the output before expanding.
+
+If Jina extraction fails for a Steam community App/news page, the collector can use Steam's public news API. This fallback is limited to the matching AppID's `steam_community_announcements` feed; third-party news is excluded. It does not provide a general fallback for store pages or other websites.
+
+Install with Python 3.10+ and install `yt-dlp` as well if using YouTube search. Keep API keys in the ignored `.env` file. Source collection failures must be reviewed before generation; a command's completion message alone is not proof that usable source files were produced.
+
 ```
 keywords.json
      │
