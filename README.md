@@ -398,7 +398,6 @@ USE_PROXY_FOR_EXTRACT=true
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `YOUTUBE_INITIAL_SEARCH_RESULTS` | `2` | Videos to fetch per keyword |
-| `YOUTUBE_MAX_RESULTS_AFTER_FILTER` | `1` | Max videos to keep after filtering |
 | `YOUTUBE_MAX_DURATION` | `3600` | Skip videos longer than this (seconds) |
 | `YOUTUBE_EXTRACT_TOP_K` | `1` | How many transcripts to extract per keyword |
 | `YOUTUBE_SEARCH_WORKERS` | `10` | Parallel search workers |

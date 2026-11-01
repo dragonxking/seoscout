@@ -8,6 +8,7 @@ import asyncio
 import subprocess
 import json
 import re
+import sys
 from typing import List, Dict, Tuple
 from youtube_transcript_api import YouTubeTranscriptApi
 import requests
@@ -170,9 +171,11 @@ class YouTube:
 
         search_query = f"ytsearch{self.config.YOUTUBE_INITIAL_RESULTS}:{search_keyword}"
 
-        # 构建命令
+        # 构建命令：用当前解释器运行 yt_dlp 模块，不依赖 PATH 上是否有 yt-dlp
         cmd = [
-            "yt-dlp",
+            sys.executable,
+            "-m",
+            "yt_dlp",
             search_query,
             "--skip-download",
             "--dump-json",
