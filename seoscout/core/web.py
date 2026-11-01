@@ -57,13 +57,14 @@ class Web:
         self.config = Config
         self.cleaner = ContentCleaner()  # 初始化内容清理器
 
-    async def search_batch(self, keywords: List[str], topic_name: str = '') -> Dict[str, List[WebItem]]:
+    async def search_batch(self, keywords: List[str], topic_name: str = '', exclude_terms: List[str] = ()) -> Dict[str, List[WebItem]]:
         """
         并行搜索多个关键词
 
         Args:
             keywords: 关键词列表
             topic_name: 主题名，用于过滤不相关结果（可选）
+            exclude_terms: 同名作品等无关结果的特征词（小写），命中即取消勾选
 
         Returns:
             {keyword: [WebItem, ...]}
@@ -76,7 +77,7 @@ class Web:
         semaphore = asyncio.Semaphore(self.config.WEB_SEARCH_CONCURRENCY)
 
         # 并行搜索（带并发控制）
-        tasks = [self._search_single(kw, semaphore, topic_name) for kw in keywords]
+        tasks = [self._search_single(kw, semaphore, topic_name, exclude_terms) for kw in keywords]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # 构建结果字典
@@ -91,7 +92,7 @@ class Web:
 
         return result_dict
 
-    async def _search_single(self, keyword: str, semaphore, topic_name: str = '') -> List[WebItem]:
+    async def _search_single(self, keyword: str, semaphore, topic_name: str = '', exclude_terms: List[str] = ()) -> List[WebItem]:
         """
         搜索单个关键词
 
@@ -135,10 +136,21 @@ class Web:
                     if not is_blocked_domain(r.get('link', ''), self.config.BLOCKED_DOMAINS)
                 ]
 
-                # Web results are NOT filtered by topic_name
-                # (only YouTube results are topic-filtered)
+                # 不相关结果只取消勾选、不删除，人工复核 search_results.json 时仍可看到并改回
+                topic_lower = topic_name.lower()
+                topic_nospace = topic_lower.replace(' ', '')
 
-                # 转换为 WebItem
+                def is_relevant(r) -> bool:
+                    link = r.get('link', '').lower()
+                    if 'tiktok.com/discover/' in link:
+                        return False
+                    text = f"{r.get('title', '')} {r.get('snippet', '')} {link}".lower()
+                    if any(term in text for term in exclude_terms):
+                        return False
+                    if not topic_name:
+                        return True
+                    return topic_lower in text or topic_nospace in text
+
                 items = []
                 for r in filtered[:self.config.WEB_SEARCH_TOP_N]:
                     domain = urlparse(r.get('link', '')).netloc
@@ -147,8 +159,11 @@ class Web:
                         url=r.get('link', ''),
                         domain=domain,
                         snippet=r.get('snippet', ''),
-                        selected=True
+                        selected=is_relevant(r)
                     ))
+                deselected = sum(1 for i in items if not i.selected)
+                if deselected:
+                    print(f"    ☐ {keyword}: {deselected}/{len(items)} 条网页不含主题名或为聚合页，已取消勾选")
 
                 return items
 

@@ -24,7 +24,7 @@ class YouTube:
     def __init__(self):
         self.config = Config
 
-    async def search_batch(self, keywords: List[str], topic_name: str = '') -> Dict[str, List[YouTubeItem]]:
+    async def search_batch(self, keywords: List[str], topic_name: str = '', exclude_terms: List[str] = ()) -> Dict[str, List[YouTubeItem]]:
         """
         并行搜索多个关键词（带实时进度反馈）
 
@@ -60,6 +60,11 @@ class YouTube:
                         # 按主题名过滤
                         if topic_name:
                             filtered = self._filter_by_topic(filtered, topic_name)
+                        if exclude_terms:
+                            dropped = [v for v in filtered if any(t in v.get('title', '').lower() for t in exclude_terms)]
+                            for v in dropped:
+                                print(f"    🗑️ 排除同名作品: \"{v.get('title', '')[:60]}\"")
+                            filtered = [v for v in filtered if v not in dropped]
 
                         # 转换为 YouTubeItem
                         items = [self._to_item(v) for v in filtered]
@@ -223,11 +228,16 @@ class YouTube:
                 except json.JSONDecodeError:
                     continue
 
+        # YouTube 会把冷门游戏名纠错成相近的词（Broodwing → Bloodwing），此时有结果但都不相关，同样要回退
+        topic_hit = topic_name and any(
+            topic_name.lower() in v['title'].lower() or topic_name.lower().replace(' ', '') in v['title'].lower()
+            for v in videos
+        )
+        if not topic_hit and fallback_keyword and fallback_keyword != search_keyword:
+            reason = "无结果" if not videos else "结果标题都不含主题名（可能被纠错）"
+            print(f"    🔄 连写搜索{reason}，回退大写+引号: \"{fallback_keyword}\"")
+            return await self._ytdlp_search(fallback_keyword, topic_name='')
         if not videos:
-            # 连写搜索无结果时，回退到大写+引号搜索
-            if fallback_keyword and fallback_keyword != search_keyword:
-                print(f"    🔄 连写搜索无结果，回退大写+引号: \"{fallback_keyword}\"")
-                return await self._ytdlp_search(fallback_keyword, topic_name='')
             raise Exception("未找到任何视频")
 
         return videos

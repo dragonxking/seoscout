@@ -198,12 +198,16 @@ async def run_search(project: str, keywords_file: str):
 
     # Read topic_name
     topic_name = ''
+    exclude_terms = []
     try:
         with open(keywords_file, 'r', encoding='utf-8') as f:
             kw_raw = json.load(f)
         topic_name = kw_raw.get('topic_name', '')
         if topic_name:
             print(f"🏷️  Topic: {topic_name}")
+        exclude_terms = [t.lower() for t in kw_raw.get('exclude_terms', [])]
+        if exclude_terms:
+            print(f"🚫 Exclude terms: {', '.join(exclude_terms)}")
     except Exception:
         pass
 
@@ -233,10 +237,10 @@ async def run_search(project: str, keywords_file: str):
         print("=" * 70)
 
         async def yt_search_with_topic(kws):
-            return await yt.search_batch(kws, topic_name=topic_name)
+            return await yt.search_batch(kws, topic_name=topic_name, exclude_terms=exclude_terms)
 
         async def web_search_with_topic(kws):
-            return await web.search_batch(kws, topic_name=topic_name)
+            return await web.search_batch(kws, topic_name=topic_name, exclude_terms=exclude_terms)
 
         yt_results, web_results = await asyncio.gather(
             search_with_retry(yt_search_with_topic, youtube_retry, "YouTube"),
