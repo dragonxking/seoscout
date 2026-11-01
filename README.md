@@ -140,6 +140,8 @@ The V2 prompt does not force word counts, keyword repetitions or tables. The leg
 - `site_facts`: list of verified facts (codes, prices, release month, naming decisions). They override conflicting sources, so pages stay consistent with each other.
 - `blocked_domains`: competitor domains. The prompt forbids linking or naming them; after generation, any remaining links to them are unlinked and leftover mentions are listed for manual editing.
 
+`search` reads `exclude_terms` (lowercase markers of same-name works, e.g. a TV villain sharing the game's name): matching YouTube videos are dropped and matching web results are deselected. Web results that never mention `topic_name`, and TikTok `/discover/` pages, are also deselected rather than deleted, so they stay visible for review.
+
 Internal links come from the keywords file's `categories` (`/<category>/<keyword-slug>`). Keywords removed from the file after `search` are skipped and never offered as links.
 
 `LLM_THINKING` may be empty (preserve provider defaults), `enabled`, or `disabled`. Set it only for a provider that supports the `thinking` field, such as DeepSeek. For an initial DeepSeek writing sample, `LLM_THINKING=disabled`, `LLM_MAX_TOKENS=8192` and `GENERATE_BATCH_SIZE=1` provide a conservative starting configuration; verify the output before expanding.
