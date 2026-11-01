@@ -73,6 +73,53 @@ def validate_markdown(content: str) -> tuple:
     return True, ""
 
 
+def load_site_context(keywords_file: str) -> dict:
+    """Site-wide fields from the keywords JSON: site_facts, blocked_domains, and page list."""
+    try:
+        with open(keywords_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {'site_facts': [], 'blocked_domains': [], 'pages': []}
+    domains = [d.lower().removeprefix('www.') for d in data.get('blocked_domains', [])]
+    # The keywords file, not search_results.json, is the current page list:
+    # keywords merged or dropped after search must not become internal links.
+    pages = [
+        {
+            'url': f"/{cat['category'].lower().replace(' ', '-')}/{keyword_to_slug(kw.strip())}",
+            'topic': kw.strip(),
+        }
+        for cat in data.get('categories', []) if cat.get('category')
+        for kw in cat.get('keywords', [])
+    ]
+    return {'site_facts': data.get('site_facts', []), 'blocked_domains': domains, 'pages': pages}
+
+
+def strip_blocked_links(content: str, domains: list) -> tuple:
+    """Unlink Markdown links to blocked domains. Returns (content, removed_urls, leftover_mentions)."""
+    if not domains:
+        return content, [], []
+    pattern = '|'.join(re.escape(d) for d in domains)
+    removed = []
+
+    def unlink(m):
+        removed.append(m.group(2))
+        return m.group(1)
+
+    content = re.sub(
+        r'\[([^\]]+)\]\((https?://(?:www\.)?(?:' + pattern + r')[^)]*)\)',
+        unlink, content, flags=re.IGNORECASE,
+    )
+    content = re.sub(
+        r'<?https?://(?:www\.)?(?:' + pattern + r')\S*?>?(?=[\s).,]|$)',
+        lambda m: removed.append(m.group(0)) or '', content, flags=re.IGNORECASE,
+    )
+    leftovers = [
+        line.strip() for line in content.splitlines()
+        if re.search(pattern, line, re.IGNORECASE)
+    ]
+    return content, removed, leftovers
+
+
 # ── main logic ──────────────────────────────────────────────────
 
 async def run_generate(
@@ -135,6 +182,17 @@ async def run_generate(
     articles_dir = f"{Config.DATA_DIR}/articles/en"
     ensure_dir(articles_dir)
 
+    site = load_site_context(keywords_file)
+    site_pages = site['pages']
+    if site_pages:
+        current = {p['topic'] for p in site_pages}
+        dropped = [e['keyword'] for e in keyword_entries if e['keyword'] not in current]
+        keyword_entries = [e for e in keyword_entries if e['keyword'] in current]
+        if dropped:
+            print(f"  ⏭️  Not in keywords file any more: {', '.join(dropped)}")
+    if site['site_facts'] or site['blocked_domains']:
+        print(f"  📌 Site facts: {len(site['site_facts'])}, blocked domains: {len(site['blocked_domains'])}")
+
     prompts = []
     skipped_no_data = 0
     skipped_exists = 0
@@ -170,6 +228,15 @@ async def run_generate(
             skipped_no_data += 1
             continue
 
+        if site['site_facts']:
+            merged['site_facts'] = site['site_facts']
+        if site['blocked_domains']:
+            merged['blocked_link_domains'] = site['blocked_domains']
+        own_url = f"/{cat_slug}/{slug}" if category else None
+        others = [p for p in site_pages if p['url'] != own_url]
+        if others and 'allowed_internal_links' not in merged:
+            merged['allowed_internal_links'] = others
+
         merged_json = json.dumps(merged, indent=2, ensure_ascii=False)
         current_date = datetime.now().strftime('%Y-%m-%d')
         cat_slug_final = cat_slug if category else "general"
@@ -203,6 +270,19 @@ async def run_generate(
     saved = 0
     failed = 0
     repair_prompts = []
+    needs_review = []
+
+    def save_article(meta, cleaned, label=""):
+        cleaned, removed, leftovers = strip_blocked_links(cleaned, site['blocked_domains'])
+        output_path = meta['output_path']
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(cleaned)
+        print(f"  ✅ {label}{meta['slug']}.mdx")
+        if removed:
+            print(f"     🔗 Unlinked {len(removed)} blocked-domain link(s)")
+        if leftovers:
+            needs_review.append((meta['slug'], leftovers))
 
     for meta, content in results:
         if not content:
@@ -213,12 +293,8 @@ async def run_generate(
         is_valid, err = validate_markdown(cleaned)
 
         if is_valid:
-            output_path = meta['output_path']
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(cleaned)
+            save_article(meta, cleaned)
             saved += 1
-            print(f"  ✅ {meta['slug']}.mdx")
         else:
             # Queue for repair
             repair_prompt = _build_repair_prompt(prompt_template, meta, cleaned, err)
@@ -239,12 +315,8 @@ async def run_generate(
             cleaned = clean_llm_output(content)
             is_valid, err = validate_markdown(cleaned)
             if is_valid:
-                output_path = meta['output_path']
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(cleaned)
+                save_article(meta, cleaned, "(repaired) ")
                 saved += 1
-                print(f"  ✅ (repaired) {meta['slug']}.mdx")
             else:
                 failed += 1
                 print(f"  ❌ {meta['slug']}.mdx — still invalid after repair")
@@ -256,6 +328,11 @@ async def run_generate(
     print(f"  Saved:   {saved}")
     print(f"  Failed:  {failed}")
     print(f"  Output:  {articles_dir}/")
+    if needs_review:
+        print("  ⚠️  Blocked domains still mentioned (edit by hand):")
+        for slug, lines in needs_review:
+            for line in lines:
+                print(f"     {slug}: {line[:160]}")
     client.print_stats()
     print("=" * 70)
 

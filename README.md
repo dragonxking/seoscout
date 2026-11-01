@@ -135,6 +135,13 @@ seoscout generate --keywords keywords.json --prompt seoscout/templates/generate_
 
 The V2 prompt does not force word counts, keyword repetitions or tables. The legacy built-in prompt remains available; V2 is selected with `--prompt` in this workflow.
 
+`generate` also reads these optional site-wide fields from the keywords JSON and adds them to every article's material:
+
+- `site_facts`: list of verified facts (codes, prices, release month, naming decisions). They override conflicting sources, so pages stay consistent with each other.
+- `blocked_domains`: competitor domains. The prompt forbids linking or naming them; after generation, any remaining links to them are unlinked and leftover mentions are listed for manual editing.
+
+Internal links come from the keywords file's `categories` (`/<category>/<keyword-slug>`). Keywords removed from the file after `search` are skipped and never offered as links.
+
 `LLM_THINKING` may be empty (preserve provider defaults), `enabled`, or `disabled`. Set it only for a provider that supports the `thinking` field, such as DeepSeek. For an initial DeepSeek writing sample, `LLM_THINKING=disabled`, `LLM_MAX_TOKENS=8192` and `GENERATE_BATCH_SIZE=1` provide a conservative starting configuration; verify the output before expanding.
 
 If Jina extraction fails for a Steam community App/news page, the collector can use Steam's public news API. This fallback is limited to the matching AppID's `steam_community_announcements` feed; third-party news is excluded. It does not provide a general fallback for store pages or other websites.
