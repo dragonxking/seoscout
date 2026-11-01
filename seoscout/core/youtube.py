@@ -464,6 +464,8 @@ class YouTube:
 
                     proxies = {"http": proxy_url, "https": proxy_url}
                     session = requests.Session()
+                    # requests lets env/system proxies override session.proxies unless trust_env is off
+                    session.trust_env = False
                     session.proxies.update(proxies)
                     api = YouTubeTranscriptApi(http_client=session)
                 else:
