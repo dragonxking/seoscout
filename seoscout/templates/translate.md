@@ -10,9 +10,10 @@
 重要规则：
 1. 将所有文本内容自然、流畅地翻译为 $language_name
 2. 保持所有 Markdown 格式不变（标题 ##、列表 -、加粗 **、链接 []、表格等）
-3. 保持所有 HTML 标签不变
-4. 保持所有 URL 不变
-5. 保持文章结构和长度一致
+3. 保持所有 HTML 标签和 MDX 组件标签不变（Steps、Step、CodeList、CodeItem、CopyCode、Keybinds、Keybind、Callout、Cycle、CycleStage、Checklist、CheckItem、FAQList、FAQItem、FAQ、YouTubeEmbed、CardGrid、Card、Section）
+4. 保持组件的 prop 名不变；只翻译人类可读的 prop 值（title、action、reward、status、question、children）。不要翻译 code、keys、type、videoId、lastChecked、checked、href
+5. 保持所有 URL 不变
+6. 保持文章结构和长度一致
 
 元数据翻译规则：
 - title：必须翻译为 $language_name

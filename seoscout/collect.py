@@ -10,6 +10,9 @@ import asyncio
 import argparse
 import os
 import re
+import hashlib
+import json
+from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
@@ -17,7 +20,9 @@ from .core.config import Config
 from .core.youtube import YouTube
 from .core.web import Web
 from .core.models import YouTubeItem, WebItem
-from .core.utils import load_json, save_json, ensure_dir
+from .core.utils import load_json, save_json, ensure_dir, save_cache
+from .core.collection_quality import content_error, collection_is_current, COLLECT_POLICY_VERSION
+from .core.relevance import topic_matches
 
 
 def keyword_to_filename(keyword: str) -> str:
@@ -52,7 +57,7 @@ def deduplicate_items(items_by_keyword, item_type="video"):
     return unique_items, url_to_keywords
 
 
-async def run_collect(project: str):
+async def run_collect(project: str, refresh: bool = False):
     """Run the extract step programmatically."""
     Config.init(project)
 
@@ -73,6 +78,22 @@ async def run_collect(project: str):
 
     collected_dir = f"{Config.OUT_DIR}/collected"
     skipped_count = 0
+    topic = re.sub(r'[_-]+', ' ', project)
+    signature = hashlib.sha256(json.dumps({
+        'search': data, 'policy': COLLECT_POLICY_VERSION,
+        'yt_top': Config.YOUTUBE_EXTRACT_TOP_K, 'web_top': Config.WEB_EXTRACT_TOP_K,
+    }, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    # Reuse reviewed local captions rather than fetching known evidence again.
+    if data.get('reference_source'):
+        from .search import load_reference_videos
+        for video in load_reference_videos(data['reference_source'], topic):
+            segments = getattr(video, '_caption_segments', [])
+            text = '\n'.join(f"[{s.get('start', 0)}s] {s.get('text', '')}" for s in segments)
+            if segments and not content_error(text, 'youtube'):
+                save_cache(video.video_id, 'youtube', {
+                    'title': video.title, 'url': video.url, 'video_id': video.video_id,
+                    'content': text, 'source_type': 'youtube', 'origin': 'reviewed_local_captions',
+                }, title=video.title)
 
     for kw_data in data["keywords"]:
         keyword = kw_data["keyword"]
@@ -85,7 +106,7 @@ async def run_collect(project: str):
             collected_path = f"{collected_dir}/{category_slug}/{keyword_file}.json"
         else:
             collected_path = f"{collected_dir}/{keyword_file}.json"
-        if os.path.exists(collected_path):
+        if not refresh and os.path.exists(collected_path) and collection_is_current(load_json(collected_path), signature):
             skipped_count += 1
             continue
 
@@ -147,30 +168,31 @@ async def run_collect(project: str):
     )
 
     results = defaultdict(lambda: {"youtube": [], "web": []})
+    rejected = []
+    usable_urls = {'youtube': set(), 'web': set()}
+
+    def attach_result(item, content, kind, mapping):
+        error = content_error(content, kind)
+        if not error and kind == 'web' and not topic_matches(content, topic):
+            error = 'body_topic_mismatch'
+        if error:
+            rejected.append({'type': kind, 'url': item.url, 'reason': error})
+            return
+        usable_urls[kind].add(item.url)
+        for keyword in mapping.get(item.url, []):
+            originals = yt_items_by_keyword[keyword] if kind == 'youtube' else web_items_by_keyword[keyword]
+            original = next(s for s in originals if s['url'] == item.url)
+            results[keyword][kind].append({
+                'type': kind, 'title': item.title, 'url': item.url, 'content': content,
+                'selection_reason': original.get('selection_reason', ''),
+                'metadata_source': original.get('source', 'web_search'),
+            })
 
     for item, content in yt_results:
-        if content:
-            url = item.url
-            keywords = yt_url_to_keywords.get(url, [])
-            for keyword in keywords:
-                results[keyword]["youtube"].append({
-                    "type": "youtube",
-                    "title": item.title,
-                    "url": item.url,
-                    "content": content
-                })
+        attach_result(item, content, 'youtube', yt_url_to_keywords)
 
     for item, content in web_results:
-        if content:
-            url = item.url
-            keywords = web_url_to_keywords.get(url, [])
-            for keyword in keywords:
-                results[keyword]["web"].append({
-                    "type": "web",
-                    "title": item.title,
-                    "url": item.url,
-                    "content": content
-                })
+        attach_result(item, content, 'web', web_url_to_keywords)
 
     print("\n" + "=" * 70)
     print("  Saving results")
@@ -182,10 +204,9 @@ async def run_collect(project: str):
     for kw_data in data["keywords"]:
         keyword = kw_data["keyword"]
         category = kw_data.get("category", "")
-        keyword_result = results.get(keyword, {"youtube": [], "web": []})
-
-        if not keyword_result["youtube"] and not keyword_result["web"]:
+        if keyword not in yt_items_by_keyword:
             continue
+        keyword_result = results.get(keyword, {"youtube": [], "web": []})
 
         keyword_file = keyword_to_filename(keyword)
         if category:
@@ -198,6 +219,7 @@ async def run_collect(project: str):
             "keyword": keyword,
             "category": category,
             "collected_at": datetime.now().isoformat(),
+            "collect_signature": signature,
             "sources": {
                 "youtube": {
                     "count": len(keyword_result["youtube"]),
@@ -221,7 +243,7 @@ async def run_collect(project: str):
 
     yt_success = sum(1 for _, content in yt_results if content)
     yt_failed = len(yt_results) - yt_success
-    print(f"YouTube: {yt_success}/{len(yt_results)} succeeded")
+    print(f"YouTube: {yt_success}/{len(yt_results)} returned text; {len(usable_urls['youtube'])} usable after validation")
     if yt_failed > 0:
         print(f"  Failed:")
         for item, content in yt_results:
@@ -230,7 +252,7 @@ async def run_collect(project: str):
 
     web_success = sum(1 for _, content in web_results if content)
     web_failed = len(web_results) - web_success
-    print(f"\nWeb: {web_success}/{len(web_results)} succeeded")
+    print(f"\nWeb: {web_success}/{len(web_results)} returned text; {len(usable_urls['web'])} usable after validation")
     if web_failed > 0:
         print(f"  Failed:")
         for item, content in web_results:
@@ -238,6 +260,18 @@ async def run_collect(project: str):
                 print(f"    - {item.url}: {item.title}")
 
     print(f"\nSaved: {total_saved} files → {collected_dir}/")
+    bundles = [load_json(str(p)) for p in Path(collected_dir).rglob('*.json')]
+    quality = {
+        'policy': COLLECT_POLICY_VERSION, 'rejected_sources': rejected,
+        'usable_unique_sources': {kind: len(urls) for kind, urls in usable_urls.items()},
+        'keywords': [{
+            'keyword': b['keyword'], 'total_sources': b['total_sources'],
+            'youtube': b['sources']['youtube']['count'], 'web': b['sources']['web']['count'],
+        } for b in bundles],
+        'missing_sources': [b['keyword'] for b in bundles if not b['total_sources']],
+    }
+    save_json(quality, f'{Config.OUT_DIR}/collect_quality.json')
+    print(f"Rejected content: {len(rejected)}; keywords without usable body: {len(quality['missing_sources'])}")
     print("=" * 70)
 
 

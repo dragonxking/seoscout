@@ -12,9 +12,11 @@ from urllib.parse import urlparse
 
 from .config import Config
 from .models import WebItem
+from .relevance import blocked_domain, rank_items, is_official_source, words, canonical_url
 from .utils import is_blocked_domain, load_cache, save_cache, get_url_hash
 from .cleaner import ContentCleaner
 from .steam_news import steam_news_endpoint, official_news_text
+from .collection_quality import content_error
 
 
 class TokenBucket:
@@ -80,6 +82,24 @@ class Web:
         tasks = [self._search_single(kw, semaphore, topic_name, exclude_terms) for kw in keywords]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        # One bounded official-news fallback for missing page-specific evidence.
+        # Run after the first batch releases the semaphore (no nested locking).
+        fallback_indices = [i for i, result in enumerate(results)
+                            if not isinstance(result, Exception)
+                            and not any(item.selected and item.selection_reason == 'intent_match' for item in result)
+                            and 'reddit' not in keywords[i].lower()]
+        if fallback_indices:
+            print(f'  🔎 Official-source fallback: {len(fallback_indices)} keywords')
+            fallback = await asyncio.gather(*[
+                self._search_single(keywords[i], semaphore, topic_name, exclude_terms,
+                    query=keywords[i]+' (site:steampowered.com OR site:steamcommunity.com)')
+                for i in fallback_indices], return_exceptions=True)
+            for i, extra in zip(fallback_indices, fallback):
+                if not isinstance(extra, Exception):
+                    combined = {item.url:item for item in results[i]}
+                    combined.update({item.url:item for item in extra})
+                    results[i] = sorted(combined.values(), key=lambda item:(item.selected,item.relevance_score), reverse=True)
+
         # 构建结果字典
         result_dict = {}
         for keyword, result in zip(keywords, results):
@@ -92,7 +112,7 @@ class Web:
 
         return result_dict
 
-    async def _search_single(self, keyword: str, semaphore, topic_name: str = '', exclude_terms: List[str] = ()) -> List[WebItem]:
+    async def _search_single(self, keyword: str, semaphore, topic_name: str = '', exclude_terms: List[str] = (), query=None) -> List[WebItem]:
         """
         搜索单个关键词
 
@@ -115,7 +135,7 @@ class Web:
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "q": keyword,
+                    "q": query or keyword,
                     "num": self.config.WEB_SEARCH_TOP_N
                 }
 
@@ -133,23 +153,8 @@ class Web:
                 # 过滤屏蔽域名
                 filtered = [
                     r for r in results
-                    if not is_blocked_domain(r.get('link', ''), self.config.BLOCKED_DOMAINS)
+                    if not blocked_domain(r.get('link', ''), self.config.BLOCKED_DOMAINS, keyword)
                 ]
-
-                # 不相关结果只取消勾选、不删除，人工复核 search_results.json 时仍可看到并改回
-                topic_lower = topic_name.lower()
-                topic_nospace = topic_lower.replace(' ', '')
-
-                def is_relevant(r) -> bool:
-                    link = r.get('link', '').lower()
-                    if 'tiktok.com/discover/' in link:
-                        return False
-                    text = f"{r.get('title', '')} {r.get('snippet', '')} {link}".lower()
-                    if any(term in text for term in exclude_terms):
-                        return False
-                    if not topic_name:
-                        return True
-                    return topic_lower in text or topic_nospace in text
 
                 items = []
                 for r in filtered[:self.config.WEB_SEARCH_TOP_N]:
@@ -157,15 +162,28 @@ class Web:
                     items.append(WebItem(
                         title=r.get('title', ''),
                         url=r.get('link', ''),
+                        original_url=r.get('link', ''),
                         domain=domain,
                         snippet=r.get('snippet', ''),
-                        selected=is_relevant(r)
+                        selected=True
                     ))
+                items = rank_items(items, keyword, topic_name, exclude_terms, getattr(self.config, 'OFFICIAL_SOURCE_DOMAINS', ()))
+                if getattr(self.config, 'OFFICIAL_WEB_ONLY', False):
+                    for item in items:
+                        requested_reddit = 'reddit' in words(keyword) and item.domain in {'reddit.com','www.reddit.com','old.reddit.com'}
+                        if not requested_reddit and not is_official_source(item.url, getattr(self.config, 'OFFICIAL_SOURCE_DOMAINS', ())):
+                            item.selected = False
+                            item.selection_reason = 'nonofficial_web_source'
+                    items.sort(key=lambda item:(item.selected,item.relevance_score), reverse=True)
                 deselected = sum(1 for i in items if not i.selected)
                 if deselected:
                     print(f"    ☐ {keyword}: {deselected}/{len(items)} 条网页不含主题名或为聚合页，已取消勾选")
 
-                return items
+                unique = {}
+                for item in items:
+                    item.url = canonical_url(item.url)
+                    unique.setdefault(item.url, item)
+                return list(unique.values())
 
             except Exception as e:
                 raise Exception(f"搜索失败: {e}")
@@ -210,6 +228,8 @@ class Web:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # 统计成功和失败
+        results = [(item, '') if isinstance(result, Exception) else result
+                   for item, result in zip(items, results)]
         success_count = sum(1 for _, content in results if content and not isinstance(content, Exception))
         print(f"  ✓ 成功: {success_count}/{len(items)}")
 
@@ -231,7 +251,7 @@ class Web:
             # 1. 检查缓存
             url_hash = get_url_hash(item.url)
             cache_data = load_cache(url_hash, "web", title=item.title)
-            if cache_data and cache_data.get("content"):
+            if cache_data and not content_error(cache_data.get("content")):
                 print(f"  💾 缓存命中: {item.title[:50]}...")
                 return (item, cache_data["content"])
 
@@ -269,6 +289,8 @@ class Web:
 
                             # 清理内容（移除导航链接、广告等）
                             cleaned_content = self.cleaner.clean(content)
+                            if content_error(cleaned_content):
+                                break
 
                             # 3. 保存到缓存
                             save_cache(url_hash, "web", {

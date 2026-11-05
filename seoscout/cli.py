@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import sys
+import re
 
 from . import __version__
 
@@ -26,7 +27,7 @@ def _derive_project(keywords_file: str) -> str:
             data = json.load(f)
         topic = data.get('topic_name', '').strip()
         if topic:
-            return topic.replace(' ', '_').lower()
+            return re.sub(r'[^\w]+', '_', topic.lower()).strip('_')
     except Exception:
         pass
     base = os.path.splitext(os.path.basename(keywords_file))[0]
@@ -51,6 +52,13 @@ def main():
         "--keywords", "-k", required=True,
         help="Path to keywords JSON file"
     )
+    search_parser.add_argument('--refresh', action='store_true',
+                               help='Search again instead of reusing cached results; back up previous output')
+    search_parser.add_argument('--references', help='Previously reviewed video JSON to supplement live search')
+    search_parser.add_argument('--exclude-domains', default='',
+                               help='Additional comma-separated domains to exclude from web references')
+    search_parser.add_argument('--official-web-only', action='store_true',
+                               help='Select only official web pages, plus Reddit when explicitly requested; YouTube is unaffected')
 
     # ── collect ──
     collect_parser = subparsers.add_parser(
@@ -65,6 +73,8 @@ def main():
         "--keywords", "-k",
         help="Keywords JSON file (used to derive project name if --project not set)"
     )
+    collect_parser.add_argument('--refresh', action='store_true',
+                                help='Rebuild collected bundles, reusing valid raw content caches')
 
     # ── generate ──
     gen_parser = subparsers.add_parser(
@@ -168,12 +178,14 @@ def main():
 
 async def _run_search(args):
     from .search import run_search
-    await run_search(args.project, args.keywords)
+    await run_search(args.project, args.keywords, refresh=args.refresh,
+                     references_file=args.references, exclude_domains=args.exclude_domains.split(','),
+                     official_web_only=args.official_web_only)
 
 
 async def _run_collect(args):
     from .collect import run_collect
-    await run_collect(args.project)
+    await run_collect(args.project, refresh=args.refresh)
 
 
 async def _run_generate(args):

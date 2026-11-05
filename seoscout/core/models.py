@@ -20,6 +20,10 @@ class YouTubeItem:
     duration_seconds: int
     view_count: int
     selected: bool = True
+    relevance_score: int = 0
+    selection_reason: str = ''
+    snippet: str = ''
+    source: str = 'youtube_search'
 
     def to_dict(self) -> dict:
         """转换为字典"""
@@ -34,6 +38,9 @@ class WebItem:
     domain: str
     snippet: str
     selected: bool = True
+    relevance_score: int = 0
+    selection_reason: str = ''
+    original_url: str = ''
 
     def to_dict(self) -> dict:
         """转换为字典"""

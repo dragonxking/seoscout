@@ -1,0 +1,48 @@
+{
+  "rule": "Use these MDX tags only when the article has matching verified facts. Never invent keys, codes, dates, prices or steps to fill a block. Do not import anything. Do not use raw HTML.",
+  "blocks": [
+    {
+      "when": "Working redeem codes with a reward",
+      "example": "<CodeList lastChecked=\"2026-11-03\">\n  <CodeItem code=\"barnowl\" reward=\"1,000 Plumes\" status=\"working\" checked=\"2026-10-31\" />\n</CodeList>"
+    },
+    {
+      "when": "A single code mentioned in another article",
+      "example": "<CopyCode code=\"barnowl\" />"
+    },
+    {
+      "when": "Numbered how-to with 2+ verified steps",
+      "example": "<Steps>\n  <Step title=\"Open the Codes button\">Top-left of the game screen, next to settings.</Step>\n  <Step title=\"Paste the code\">Enter it exactly, then submit.</Step>\n</Steps>"
+    },
+    {
+      "when": "In-game keys named by a source",
+      "example": "<Keybinds>\n  <Keybind keys=\"Space\" action=\"Take off\" />\n  <Keybind keys=\"E\" action=\"Eat\" />\n  <Keybind keys=\"M\" action=\"Open map\" />\n</Keybinds>"
+    },
+    {
+      "when": "A limit, conflict, or missing fact the reader must not miss",
+      "example": "<Callout type=\"warning\" title=\"Unverified\">Sources do not name a dive key. Do not guess one.</Callout>"
+    },
+    {
+      "when": "Growth or life-cycle stages with named stages",
+      "example": "<Cycle>\n  <CycleStage title=\"Egg\">Laid in a nest or claimed hollow.</CycleStage>\n  <CycleStage title=\"Hatchling\">Must be fed by the family.</CycleStage>\n</Cycle>"
+    },
+    {
+      "when": "A player checklist they can tick off",
+      "example": "<Checklist>\n  <CheckItem>Pick a bird at spawn</CheckItem>\n  <CheckItem>Hunt once before nesting</CheckItem>\n</Checklist>"
+    },
+    {
+      "when": "Leftover real questions after the main answer",
+      "example": "<FAQList>\n  <FAQItem question=\"Do codes give birds?\">No. The listed codes pay Plumes only.</FAQItem>\n</FAQList>"
+    },
+    {
+      "when": "A collected YouTube video is the evidence for a mechanic",
+      "example": "<YouTubeEmbed videoId=\"cv9VRpaQ8z8\" title=\"Broodwing flight shown in a player video\" />"
+    }
+  ],
+  "callout_types": ["info", "tip", "warning", "danger", "success"],
+  "never": [
+    "Do not emit Steps with vague coaching and no named action.",
+    "Do not emit Keybind unless a source named the key.",
+    "Do not emit CodeItem for expired or invented codes.",
+    "Do not change prop names. Translate only human-readable text in later translate step."
+  ]
+}

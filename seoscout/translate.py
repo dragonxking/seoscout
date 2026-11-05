@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from pathlib import Path
 from string import Template
 from datetime import datetime
@@ -110,7 +111,7 @@ async def run_translate(
     print("=" * 70)
 
     # Parse languages (any code accepted, name resolved from map or title-cased)
-    target_langs = [l.strip() for l in lang.split(',') if l.strip()]
+    target_langs = list(dict.fromkeys(l.strip() for l in lang.split(',') if l.strip() and l.strip() != 'en'))
     if not target_langs:
         print("  ❌ No target languages specified")
         return
@@ -201,7 +202,7 @@ async def run_translate(
 
     # Execute in batches
     client = LLMClient()
-    client.stats['start_time'] = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else __import__('time').time()
+    client.stats['start_time'] = time.time()
 
     batch_size = Config.TRANSLATE_BATCH_SIZE
     batch_delay = Config.TRANSLATE_BATCH_DELAY
@@ -270,6 +271,7 @@ async def run_translate(
                 await asyncio.sleep(batch_delay)
 
     # Summary
+    client.stats['end_time'] = time.time()
     print("\n" + "=" * 70)
     print(f"  {'✅' if failed == 0 else '⚠️ '} Translate complete")
     print("=" * 70)

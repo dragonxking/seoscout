@@ -109,6 +109,47 @@ seoscout generate --keywords keywords.json
 seoscout translate --keywords keywords.json --lang es,pt,de,fr
 ```
 
+Search results include `selected`, `selection_reason`, and `relevance_score`.
+`intent_match` means a metadata match to the page's keyword; it does not verify
+the video's facts or prove there is enough material for an article.
+`official_background` is related official context without a specific keyword
+match. Check `quality_summary.missing_sources` and `background_only` before
+collecting or generating articles.
+Steam storefront language and tracking variants are merged by app ID; original
+search URLs remain in `original_url` for review. Other tracking parameters are
+removed without dropping meaningful query parameters such as forum page numbers.
+
+Use `seoscout search --keywords keywords.json --refresh` to repeat a search.
+The previous output is copied into `out/search_history/` before replacement.
+Search policy, keyword input, result limits, and domain-filter changes also
+invalidate the metadata cache automatically. A nonempty list with no selected
+results is retried rather than reported as usable.
+
+Optional search arguments:
+
+- `--exclude-domains example.com,other.example` excludes additional web domains.
+  The keyword JSON can also declare a `blocked_domains` list and an
+  `official_domains` list. Explicit Reddit queries are allowed through the
+  default Reddit web-search block; unrelated queries keep that block.
+- `--official-web-only` selects only official web sources (and Reddit when
+  explicitly requested), while retaining other candidates as deselected review
+  records. It does not restrict YouTube to official channels. Steam discussions,
+  community guides, and generic community homepages are not official news.
+- `--references reviewed-videos.json` supplements live searches with an existing
+  reviewed dataset. The file must declare the matching `topic` or `topic_name`
+  and a `videos` array. Only entries with a valid `video_id` and
+  `relevance.status: "included"` are admitted. These entries use
+  `source: "reviewed_reference"`; their view counts remain historical snapshot
+  values, not fresh YouTube measurements. Unidentified Shorts are skipped.
+  If a reviewed entry links `transcript_review.evidence_file` to a successful
+  caption JSON within the dataset directory, its caption terms can support
+  narrow searches. Results store matched terms and timestamps, not the whole
+  transcript. File references outside that directory are ignored.
+
+Keep the same search options when repeating a run. Collection remains a separate
+step: `seoscout collect --keywords keywords.json` (the old `extract` hint is not
+a CLI subcommand).
+
 Or do search + collect + generate (and translate if `languages` is set) in one command:
 
 ```bash

@@ -15,6 +15,7 @@ import requests
 
 from .config import Config
 from .models import YouTubeItem
+from .relevance import topic_matches, rank_items, words, limit_video_duration
 from .utils import format_duration, load_cache, save_cache
 
 
@@ -54,8 +55,9 @@ class YouTube:
                         # 使用 yt-dlp 搜索（传入 topic_name 优化查询）
                         videos = await self._ytdlp_search(keyword, topic_name=topic_name)
 
-                        # 过滤时长
-                        filtered = self._filter_by_duration(videos)
+                        # Topic/intent first: short generic trailers must not
+                        # displace a longer, directly relevant playthrough.
+                        filtered = videos
 
                         # 按主题名过滤
                         if topic_name:
@@ -67,7 +69,8 @@ class YouTube:
                             filtered = [v for v in filtered if v not in dropped]
 
                         # 转换为 YouTubeItem
-                        items = [self._to_item(v) for v in filtered]
+                        items = rank_items([self._to_item(v) for v in filtered], keyword, topic_name, exclude_terms)
+                        items = limit_video_duration(items, self.config.YOUTUBE_MAX_DURATION)
 
                         return (keyword, items, None, retry_count)
 
@@ -146,33 +149,14 @@ class YouTube:
         Returns:
             视频信息列表
         """
-        # 搜索策略：连写优先 → 大写+引号回退
-        # 例如 "all firing best characters" → "Allfiring best characters"（连写）
-        # 如果连写无结果 → '"All Firing" best characters'（大写+引号）
-        search_keyword = keyword
+        # Preserve the natural multi-word name; normalize only punctuation.
+        search_keyword = ' '.join(words(keyword))
         fallback_keyword = None
-        if topic_name:
-            import re
-            topic_lower = topic_name.lower()
-            topic_nospace = topic_name.replace(' ', '')
-            # 连写形式：Allfiring
-            topic_nospace_cased = topic_nospace[:1].upper() + topic_nospace[1:].lower()
-            if topic_lower in keyword.lower():
-                # 大写+引号形式作为 fallback："All Firing"
-                topic_title_cased = topic_name.title()
-                fallback_keyword = re.sub(
-                    re.escape(topic_name),
-                    f'"{topic_title_cased}"',
-                    keyword,
-                    flags=re.IGNORECASE
-                )
-                # 主搜索用连写形式
-                search_keyword = re.sub(
-                    re.escape(topic_name),
-                    topic_nospace_cased,
-                    keyword,
-                    flags=re.IGNORECASE
-                )
+        topic_words = words(topic_name)
+        keyword_words = words(keyword)
+        if topic_words and keyword_words[:len(topic_words)] == topic_words:
+            tail = ' '.join(keyword_words[len(topic_words):])
+            fallback_keyword = f'"{" ".join(topic_words)}" {tail}'.strip()
 
         search_query = f"ytsearch{self.config.YOUTUBE_INITIAL_RESULTS}:{search_keyword}"
 
@@ -220,19 +204,17 @@ class YouTube:
                         'title': data.get('title', ''),
                         'video_id': data.get('id', ''),
                         'url': f"https://www.youtube.com/watch?v={data.get('id', '')}",
-                        'channel': data.get('uploader', ''),
+                        'channel': data.get('uploader') or data.get('channel', ''),
                         'duration': data.get('duration_string', ''),
                         'duration_seconds': data.get('duration', 0),
-                        'view_count': data.get('view_count', 0)
+                        'view_count': data.get('view_count') or 0,
+                        'snippet': data.get('description') or ''
                     })
                 except json.JSONDecodeError:
                     continue
 
         # YouTube 会把冷门游戏名纠错成相近的词（Broodwing → Bloodwing），此时有结果但都不相关，同样要回退
-        topic_hit = topic_name and any(
-            topic_name.lower() in v['title'].lower() or topic_name.lower().replace(' ', '') in v['title'].lower()
-            for v in videos
-        )
+        topic_hit = topic_name and any(topic_matches(v['title'], topic_name) for v in videos)
         if not topic_hit and fallback_keyword and fallback_keyword != search_keyword:
             reason = "无结果" if not videos else "结果标题都不含主题名（可能被纠错）"
             print(f"    🔄 连写搜索{reason}，回退大写+引号: \"{fallback_keyword}\"")
@@ -245,7 +227,7 @@ class YouTube:
     def _duration_seconds(self, video: Dict) -> float:
         duration = video.get('duration_seconds')
         if duration is None:
-            return float('inf')
+            return 0
         return duration
 
     def _filter_by_duration(self, videos: List[Dict]) -> List[Dict]:
@@ -300,7 +282,7 @@ class YouTube:
         for v in videos:
             title = v.get('title', '')
             title_lower = title.lower()
-            if topic_lower in title_lower or topic_nospace in title_lower:
+            if topic_matches(title + ' ' + (v.get('snippet') or ''), topic_name):
                 kept.append(v)
             else:
                 filtered_out.append(v)
@@ -354,8 +336,9 @@ class YouTube:
             video_id=video.get('video_id', ''),
             channel=video.get('channel', ''),
             duration=video.get('duration', ''),
-            duration_seconds=video.get('duration_seconds', 0),
-            view_count=video.get('view_count', 0),
+            duration_seconds=video.get('duration_seconds') or 0,
+            view_count=video.get('view_count') or 0,
+            snippet=video.get('snippet', ''),
             selected=True
         )
 
@@ -379,6 +362,8 @@ class YouTube:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # 统计成功和失败
+        results = [(item, '') if isinstance(result, Exception) else result
+                   for item, result in zip(items, results)]
         success_count = sum(1 for _, content in results if content and not isinstance(content, Exception))
         failed_count = len(items) - success_count
 
@@ -488,7 +473,11 @@ class YouTube:
                     return " ".join([snippet.text for snippet in fetched_transcript])
                 except Exception as e:
                     # 如果指定语言失败，尝试获取任何可用字幕
-                    fetched_transcript = api.fetch(video_id)
+                    available = list(api.list(video_id))
+                    if not available:
+                        return ''
+                    preferred = next((t for t in available if t.language_code.startswith('en')), available[0])
+                    fetched_transcript = preferred.fetch()
                     return " ".join([snippet.text for snippet in fetched_transcript])
 
             except Exception as e:

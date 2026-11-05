@@ -70,6 +70,12 @@ def validate_markdown(content: str) -> tuple:
         return False, "No heading or metadata export found"
     if len(content) < 200:
         return False, f"Content too short ({len(content)} chars)"
+    if not content.startswith('export const metadata = {'):
+        return False, 'Missing initial JavaScript metadata export'
+    if re.search(r'^#\s+', content, re.M):
+        return False, 'Body must not contain an H1; the template renders the metadata title'
+    if not re.search(r'\[[^\]]+\]\(https?://[^)]+\)', content):
+        return False, 'Missing direct external evidence link; cite actual supplied official sources'
     return True, ""
 
 
@@ -173,10 +179,6 @@ async def run_generate(
         print("  ❌ No keywords found")
         return
 
-    if test:
-        keyword_entries = keyword_entries[:2]
-        print(f"  🧪 TEST MODE: {len(keyword_entries)} keywords\n")
-
     # Load collected material for each keyword
     collected_dir = f"{Config.OUT_DIR}/collected"
     articles_dir = f"{Config.DATA_DIR}/articles/en"
@@ -192,6 +194,9 @@ async def run_generate(
             print(f"  ⏭️  Not in keywords file any more: {', '.join(dropped)}")
     if site['site_facts'] or site['blocked_domains']:
         print(f"  📌 Site facts: {len(site['site_facts'])}, blocked domains: {len(site['blocked_domains'])}")
+    if test:
+        keyword_entries = keyword_entries[:2]
+        print(f"  🧪 TEST MODE: {len(keyword_entries)} eligible keywords\n")
 
     prompts = []
     skipped_no_data = 0
@@ -241,11 +246,15 @@ async def run_generate(
         current_date = datetime.now().strftime('%Y-%m-%d')
         cat_slug_final = cat_slug if category else "general"
 
-        prompt = prompt_template.format(
-            merged_data=merged_json,
-            current_date=current_date,
-            category=cat_slug_final,
-        )
+        format_kwargs = {
+            "merged_data": merged_json,
+            "current_date": current_date,
+            "category": cat_slug_final,
+        }
+        if "{mdx_catalog}" in prompt_template:
+            catalog_path = Path(__file__).parent / "templates" / "mdx-blocks.json"
+            format_kwargs["mdx_catalog"] = catalog_path.read_text(encoding="utf-8") if catalog_path.exists() else "[]"
+        prompt = prompt_template.format(**format_kwargs)
 
         prompts.append((prompt, {'keyword': keyword, 'slug': slug, 'output_path': output_path}))
 
@@ -271,6 +280,7 @@ async def run_generate(
     failed = 0
     repair_prompts = []
     needs_review = []
+    originals = {meta['keyword']: prompt for prompt, meta in prompts}
 
     def save_article(meta, cleaned, label=""):
         cleaned, removed, leftovers = strip_blocked_links(cleaned, site['blocked_domains'])
@@ -297,7 +307,7 @@ async def run_generate(
             saved += 1
         else:
             # Queue for repair
-            repair_prompt = _build_repair_prompt(prompt_template, meta, cleaned, err)
+            repair_prompt = _build_repair_prompt(originals[meta['keyword']], meta, cleaned, err)
             repair_prompts.append((repair_prompt, meta))
 
     # Repair pass
@@ -341,7 +351,8 @@ def _build_repair_prompt(template: str, meta: dict, content: str, error: str) ->
     """Build a repair prompt asking LLM to fix the invalid output."""
     keyword = meta.get('keyword', 'unknown')
     return (
-        f"The previous article draft for keyword \"{keyword}\" had issues:\n"
+        template + '\n\n---\nRepair the draft using the same source evidence and constraints above.\n'
+        + f"The previous article draft for keyword \"{keyword}\" had issues:\n"
         f"  Error: {error}\n\n"
         f"Previous draft (for reference, do NOT repeat the same mistakes):\n"
         f"{content[:2000]}\n\n"

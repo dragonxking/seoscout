@@ -148,7 +148,8 @@ class LLMClient:
         if batch_size is None:
             batch_size = Config.GENERATE_BATCH_SIZE
 
-        self.stats['start_time'] = time.time()
+        if self.stats['start_time'] is None:
+            self.stats['start_time'] = time.time()
         results: List[Tuple[Dict, Optional[str]]] = []
 
         async with aiohttp.ClientSession() as session:
